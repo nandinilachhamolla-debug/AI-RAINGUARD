@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>AI RainGuard — Heavy Rainfall & Inundation Early Warning System</title>
+
+<link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+>
+
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="app">
+
+    <aside class="sidebar" id="sidebar">
+
+        <div class="sidebar__brand">
+            <span class="sidebar__mark">RG</span>
+
+            <div class="sidebar__brand-text">
+                <strong>AI RainGuard</strong>
+                <small>Early Warning Console</small>
+            </div>
+        </div>
+
+        <nav class="sidebar__nav">
+
+            <a href="#dashboard" class="nav-link is-active">
+                <span class="nav-link__icon">▣</span>
+                Dashboard
+            </a>
+
+            <a href="#risk-map" class="nav-link">
+                <span class="nav-link__icon">◎</span>
+                Risk Map
+            </a>
+
+            <a href="#rainfall-analysis" class="nav-link">
+                <span class="nav-link__icon">∿</span>
+                Rainfall Analysis
+            </a>
+
+            <a href="#alerts" class="nav-link">
+                <span class="nav-link__icon">▲</span>
+                Alerts
+            </a>
+
+            <a href="#incident-reports" class="nav-link">
+                <span class="nav-link__icon">✎</span>
+                Incident Reports
+            </a>
+
+            <a href="#system-status" class="nav-link">
+                <span class="nav-link__icon">⚙</span>
+                System Status
+            </a>
+
+        </nav>
+
+        <div class="sidebar__footer">
+            <p>Smart India Hackathon 2026</p>
+            <p class="sidebar__ps">Problem Statement SIH26071</p>
+        </div>
+
+    </aside>
+
+    <div class="main">
+
+        <header class="topbar">
+
+            <button
+                class="topbar__menu"
+                id="menuToggle"
+                aria-label="Toggle navigation"
+            >
+                ☰
+            </button>
+
+            <div class="topbar__title">
+
+                <h1>
+                    AI RainGuard
+                    <span class="topbar__title-sep">—</span>
+                    Heavy Rainfall & Inundation Early Warning System
+                </h1>
+
+                <p class="topbar__subtitle">
+                    Prototype for North-East India · historical NASA GPM IMERG data, 01–04 Jun 2025 · SIH26071
+                </p>
+
+            </div>
+
+            <div class="topbar__status">
+
+                <span
+                    class="badge badge--demo"
+                    title="Historical NASA rainfall data with a connected prototype rainfall risk model."
+                >
+                    PROTOTYPE · HISTORICAL DATA
+                </span>
+
+                <div class="topbar__clock" id="liveClock">
+                    --:--:--
+                </div>
+
+            </div>
+
+        </header>
+
+        <main class="content">
+
+            <section id="dashboard" class="section">
+
+                <div class="section__head">
+
+                    <h2>Regional Snapshot</h2>
+
+                    <p>
+                        AI RainGuard combines NASA GPM IMERG precipitation data
+                        with a prototype rainfall-risk inference API. The current
+                        build demonstrates rainfall-risk assessment from historical
+                        data. Full inundation prediction will additionally require
+                        terrain, drainage, river-level and flood-extent inputs.
+                    </p>
+
+                </div>
+
+                <div class="cards">
+
+                    <article class="card card--rain">
+
+                        <div class="card__icon">🛰️</div>
+
+                        <div class="card__body">
+
+                            <span class="card__label">
+                                NASA Rainfall Data
+                            </span>
+
+                            <span
+                                class="card__value"
+                                id="statRainfall"
+                            >
+                                Loading...
+                            </span>
+
+                            <span class="card__meta">
+                                Dataset average · 01–04 Jun 2025 · historical data
+                            </span>
+
+                        </div>
+
+                    </article>
+
+
+                    <article class="card card--risk">
+
+                        <div class="card__icon">⚠</div>
+
+                        <div class="card__body">
+
+                            <span class="card__label">
+                                AI Risk Model
+                            </span>
+
+                            <span
+                                class="card__value card__value--muted"
+                                id="statRisk"
+                            >
+                                Connecting...
+                            </span>
+
+                            <span class="card__meta">
+                                Prototype rainfall-risk prediction API
+                            </span>
+
+                        </div>
+
+                    </article>
+
+
+                    <article class="card card--zones">
+
+                        <div class="card__icon">◎</div>
+
+                        <div class="card__body">
+
+                            <span class="card__label">
+                                Risk Zones
+                            </span>
+
+                            <span
+                                class="card__value"
+                                id="statZones"
+                            >
+                                Loading...
+                            </span>
+
+                            <span class="card__meta">
+                                High and severe rainfall-risk grid cells
+                            </span>
+
+                        </div>
+
+                    </article>
+
+
+                    <article class="card card--alerts">
+
+                        <div class="card__icon">🔔</div>
+
+                        <div class="card__body">
+
+                            <span class="card__label">
+                                Risk Alerts
+                            </span>
+
+                            <span
+                                class="card__value"
+                                id="statAlerts"
+                            >
+                                0
+                            </span>
+
+                            <span class="card__meta">
+                                Historical-data prototype alerts
+                            </span>
+
+                        </div>
+
+                    </article>
+
+                </div>
+
+            </section>
+
+
+            <section id="risk-map" class="section">
+
+                <div class="section__head">
+
+                    <h2>
+                        Rainfall Risk Map — North-East India
+                    </h2>
+
+                    <p>
+                        Grid cells show NASA GPM IMERG rainfall across the
+                        prototype region. Colours are generated through the
+                        connected rainfall-risk prediction system.
+                    </p>
+
+                </div>
+
+                <div class="panel-grid panel-grid--map">
+
+                    <div class="panel panel--map">
+                        <div id="map"></div>
+                    </div>
+
+                    <div class="panel panel--legend">
+
+                        <h3 class="panel__title">
+                            AI Risk Legend
+                        </h3>
+
+                        <ul class="legend-list">
+
+                            <li class="legend-item">
+                                <span class="legend-dot legend-dot--low"></span>
+                                <div>
+                                    <strong>Low</strong>
+                                    <small>Low rainfall risk</small>
+                                </div>
+                            </li>
+
+                            <li class="legend-item">
+                                <span class="legend-dot legend-dot--moderate"></span>
+                                <div>
+                                    <strong>Moderate</strong>
+                                    <small>Moderate rainfall risk</small>
+                                </div>
+                            </li>
+
+                            <li class="legend-item">
+                                <span class="legend-dot legend-dot--high"></span>
+                                <div>
+                                    <strong>High</strong>
+                                    <small>High rainfall risk</small>
+                                </div>
+                            </li>
+
+                            <li class="legend-item">
+                                <span class="legend-dot legend-dot--severe"></span>
+                                <div>
+                                    <strong>Severe</strong>
+                                    <small>Severe rainfall risk</small>
+                                </div>
+                            </li>
+
+                        </ul>
+
+                        <div class="panel__note panel__note--warning">
+
+                            <p id="modelMessage">
+                                <strong>AI Risk Model:</strong>
+                                Connecting to the local prediction API...
+                            </p>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <section id="rainfall-analysis" class="section">
+
+                <div class="section__head">
+
+                    <h2>
+                        Daily Rainfall — NASA GPM IMERG
+                    </h2>
+
+                    <p>
+                        Daily precipitation for 01–04 Jun 2025.
+                        Values are read directly from
+                        <code>NER_Rainfall_Dataset.csv</code>.
+                        This is historical satellite data and not a forecast.
+                    </p>
+
+                </div>
+
+                <div class="panel-grid panel-grid--trend">
+
+                    <div class="panel panel--chart">
+
+                        <div class="panel__toolbar">
+
+                            <h3 class="panel__title">
+                                Daily Precipitation (mm/day)
+                            </h3>
+
+                            <select
+                                id="stationSelect"
+                                class="select"
+                            >
+
+                                <option value="sohra">
+                                    Sohra (Cherrapunji), Meghalaya
+                                </option>
+
+                                <option value="guwahati">
+                                    Guwahati, Assam
+                                </option>
+
+                                <option value="imphal">
+                                    Imphal, Manipur
+                                </option>
+
+                                <option value="agartala">
+                                    Agartala, Tripura
+                                </option>
+
+                            </select>
+
+                        </div>
+
+                        <canvas
+                            id="rainfallChart"
+                            height="260"
+                        ></canvas>
+
+                        <p class="panel__footnote">
+                            Dashed line is a visual reference level only.
+                        </p>
+
+                    </div>
+
+
+                    <div class="panel panel--stats">
+
+                        <h3 class="panel__title">
+                            Station Summary
+                        </h3>
+
+                        <dl class="stat-list">
+
+                            <div class="stat-row">
+                                <dt>Peak daily rainfall</dt>
+                                <dd id="statPeak">—</dd>
+                            </div>
+
+                            <div class="stat-row">
+                                <dt>4-day cumulative</dt>
+                                <dd id="statCumulative">—</dd>
+                            </div>
+
+                            <div class="stat-row">
+                                <dt>Reference level</dt>
+                                <dd>25 mm/day</dd>
+                            </div>
+
+                            <div class="stat-row">
+                                <dt>Data window</dt>
+                                <dd>01–04 Jun 2025</dd>
+                            </div>
+
+                        </dl>
+
+                    </div>
+
+                </div>
+
+
+                <div class="panel panel--datasource">
+
+                    <h3 class="panel__title">
+                        NASA Data Source
+                    </h3>
+
+                    <dl class="datasource-grid">
+
+                        <div class="datasource-item">
+                            <dt>Dataset</dt>
+                            <dd>NASA GPM IMERG V07</dd>
+                        </div>
+
+                        <div class="datasource-item">
+                            <dt>Variable</dt>
+                            <dd>Daily precipitation</dd>
+                        </div>
+
+                        <div class="datasource-item">
+                            <dt>Unit</dt>
+                            <dd>mm/day</dd>
+                        </div>
+
+                        <div class="datasource-item">
+                            <dt>Resolution</dt>
+                            <dd>0.1° × 0.1°</dd>
+                        </div>
+
+                        <div class="datasource-item">
+                            <dt>Region</dt>
+                            <dd>88°E–98°E, 21°N–30°N</dd>
+                        </div>
+
+                        <div class="datasource-item">
+                            <dt>File</dt>
+                            <dd>NER_Rainfall_Dataset.csv</dd>
+                        </div>
+
+                    </dl>
+
+                </div>
+
+            </section>
+
+
+            <section id="alerts" class="section">
+
+                <div class="section__head">
+
+                    <h2>
+                        Early Warning & Alerts
+                    </h2>
+
+                    <p>
+                        Prototype alerts generated from rainfall-risk
+                        predictions using the historical NASA dataset.
+                    </p>
+
+                </div>
+
+                <div class="panel panel--alerts">
+
+                    <ul
+                        class="alert-list"
+                        id="alertList"
+                    ></ul>
+
+                </div>
+
+            </section>
+
+
+            <section id="incident-reports" class="section">
+
+                <div class="section__head">
+
+                    <h2>
+                        Field Incident Reporting
+                    </h2>
+
+                    <p>
+                        Record observed flooding or weather-related incidents.
+                        Reports are stored locally in this prototype.
+                    </p>
+
+                </div>
+
+                <div class="panel-grid panel-grid--incident">
+
+                    <form
+                        class="panel panel--form"
+                        id="incidentForm"
+                    >
+
+                        <div class="field">
+
+                            <label for="incidentLocation">
+                                Location
+                            </label>
+
+                            <input
+                                type="text"
+                                id="incidentLocation"
+                                placeholder="Example: Sohra Bazar"
+                                required
+                            >
+
+                        </div>
+
+
+                        <div class="field">
+
+                            <label for="incidentDescription">
+                                Description
+                            </label>
+
+                            <textarea
+                                id="incidentDescription"
+                                rows="4"
+                                placeholder="Describe what you observed"
+                                required
+                            ></textarea>
+
+                        </div>
+
+
+                        <div class="field">
+
+                            <label for="incidentPhoto">
+                                Photo (optional)
+                            </label>
+
+                            <input
+                                type="file"
+                                id="incidentPhoto"
+                                accept="image/*"
+                            >
+
+                            <div
+                                class="photo-preview"
+                                id="photoPreview"
+                                hidden
+                            >
+                                <img
+                                    id="photoPreviewImg"
+                                    alt="Incident preview"
+                                >
+
+                                <span
+                                    id="photoPreviewName"
+                                ></span>
+
+                            </div>
+
+                        </div>
+
+
+                        <button
+                            type="submit"
+                            class="btn btn--primary"
+                        >
+                            Submit Report
+                        </button>
+
+                    </form>
+
+
+                    <div class="panel panel--reports">
+
+                        <h3 class="panel__title">
+                            Recent Reports
+                            <span
+                                class="badge badge--muted"
+                                id="reportCount"
+                            >
+                                0
+                            </span>
+                        </h3>
+
+                        <ul
+                            class="report-list"
+                            id="reportList"
+                        >
+                            <li
+                                class="report-list__empty"
+                                id="reportEmpty"
+                            >
+                                No incident reports submitted yet.
+                            </li>
+                        </ul>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <section id="system-status" class="section">
+
+                <div class="section__head">
+
+                    <h2>
+                        System Status
+                    </h2>
+
+                    <p>
+                        Live status of the components currently connected
+                        to the AI RainGuard prototype.
+                    </p>
+
+                </div>
+
+
+                <div class="panel panel--status">
+
+                    <ul class="status-list">
+
+                        <li class="status-item">
+
+                            <span
+                                class="status-dot status-dot--connected"
+                                id="datasetDot"
+                            ></span>
+
+                            <div class="status-item__body">
+
+                                <strong>
+                                    NASA Dataset
+                                </strong>
+
+                                <span>
+                                    NER rainfall dataset loaded in browser
+                                </span>
+
+                            </div>
+
+                            <span
+                                class="status-tag status-tag--connected"
+                                id="datasetStatus"
+                            >
+                                Connected
+                            </span>
+
+                        </li>
+
+
+                        <li class="status-item">
+
+                            <span
+                                class="status-dot status-dot--pending"
+                                id="modelDot"
+                            ></span>
+
+                            <div class="status-item__body">
+
+                                <strong>
+                                    AI Risk Model
+                                </strong>
+
+                                <span>
+                                    Prototype rainfall-risk inference model
+                                </span>
+
+                            </div>
+
+                            <span
+                                class="status-tag status-tag--pending"
+                                id="modelStatus"
+                            >
+                                Connecting...
+                            </span>
+
+                        </li>
+
+
+                        <li class="status-item">
+
+                            <span
+                                class="status-dot status-dot--pending"
+                                id="apiDot"
+                            ></span>
+
+                            <div class="status-item__body">
+
+                                <strong>
+                                    Prediction API
+                                </strong>
+
+                                <span>
+                                    Flask backend prediction service
+                                </span>
+
+                            </div>
+
+                            <span
+                                class="status-tag status-tag--pending"
+                                id="apiStatus"
+                            >
+                                Connecting...
+                            </span>
+
+                        </li>
+
+
+                        <li class="status-item">
+
+                            <span
+                                class="status-dot status-dot--future"
+                            ></span>
+
+                            <div class="status-item__body">
+
+                                <strong>
+                                    Live Weather / NWP
+                                </strong>
+
+                                <span>
+                                    Radar and NWP feeds not yet integrated
+                                </span>
+
+                            </div>
+
+                            <span class="status-tag status-tag--future">
+                                Future
+                            </span>
+
+                        </li>
+
+
+                        <li class="status-item">
+
+                            <span
+                                class="status-dot status-dot--future"
+                            ></span>
+
+                            <div class="status-item__body">
+
+                                <strong>
+                                    Inundation Model
+                                </strong>
+
+                                <span>
+                                    Terrain, drainage, river-level and
+                                    flood-extent inputs required
+                                </span>
+
+                            </div>
+
+                            <span class="status-tag status-tag--future">
+                                Future
+                            </span>
+
+                        </li>
+
+                    </ul>
+
+                </div>
+
+            </section>
+
+
+            <footer class="page-footer">
+
+                <p>
+                    AI RainGuard · Smart India Hackathon 2026 · SIH26071.
+                    Historical NASA GPM IMERG rainfall data is used in this
+                    prototype. The connected model currently provides
+                    rainfall-risk inference. Full inundation prediction,
+                    live weather, radar and NWP integration are future
+                    components.
+                </p>
+
+            </footer>
+
+        </main>
+
+    </div>
+
+</div>
+
+
+<div
+    class="toast"
+    id="toast"
+></div>
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script src="script.js"></script>
+
+</body>
+</html>
