@@ -1,9 +1,13 @@
-const API_URL = "http://127.0.0.1:5000";
+const API_URL = "https://ai-rainguard.onrender.com";
 
 let rainfallData = [];
 let rainfallChart = null;
 let riskMap = null;
 let mapMarkers = [];
+
+let apiConnected = false;
+let predictionCache = new Map();
+let cellPredictions = [];
 
 const stationMeta = {
     sohra: {
@@ -27,7 +31,13 @@ const stationMeta = {
     }
 };
 
+
+/* =========================================================
+   CSV PARSER
+========================================================= */
+
 function parseCSV(text) {
+
     const lines = text
         .trim()
         .split(/\r?\n/);
@@ -41,28 +51,39 @@ function parseCSV(text) {
         .map(header => header.trim());
 
     return lines.slice(1).map(line => {
+
         const values = line.split(",");
         const row = {};
 
         headers.forEach((header, index) => {
+
             row[header] =
                 values[index]
                     ? values[index].trim()
                     : "";
+
         });
 
         return row;
     });
 }
 
+
+/* =========================================================
+   LOAD NASA RAINFALL DATA
+========================================================= */
+
 async function loadRainfallData() {
+
     try {
+
         const response =
             await fetch(
                 "NER_Rainfall_Dataset.csv"
             );
 
         if (!response.ok) {
+
             throw new Error(
                 "NASA CSV could not be loaded"
             );
@@ -74,6 +95,7 @@ async function loadRainfallData() {
         rainfallData =
             parseCSV(text)
                 .map(row => ({
+
                     time:
                         row.time ||
                         row.date,
@@ -94,13 +116,16 @@ async function loadRainfallData() {
                         Number(
                             row.precipitation
                         )
+
                 }))
                 .filter(row =>
+
                     Number.isFinite(row.lat) &&
                     Number.isFinite(row.lon) &&
                     Number.isFinite(
                         row.precipitation
                     )
+
                 );
 
         console.log(
@@ -108,17 +133,24 @@ async function loadRainfallData() {
             rainfallData.length
         );
 
-        updateDashboard();
+        if (!rainfallData.length) {
 
-        createRiskMap();
+            showToast(
+                "NASA rainfall dataset contains no valid records."
+            );
 
-        createRainfallChart(
-            "sohra"
-        );
+            return;
+        }
 
-        generateAlerts();
+        createRainfallChart("sohra");
+
+        /*
+         * Prediction data is loaded after API health
+         * verification during initialization.
+         */
 
     } catch (error) {
+
         console.error(
             "Dataset error:",
             error
@@ -130,92 +162,53 @@ async function loadRainfallData() {
     }
 }
 
-function updateDashboard() {
-    if (!rainfallData.length) {
-        return;
+
+/* =========================================================
+   RISK CALCULATION FALLBACK
+========================================================= */
+
+function calculateRisk(rainfall) {
+
+    rainfall = Number(rainfall);
+
+    if (rainfall >= 100) {
+
+        return {
+            level: "Severe",
+            score: 90
+        };
     }
 
-    const values =
-        rainfallData.map(
-            row =>
-                row.precipitation
-        );
+    if (rainfall >= 50) {
 
-    const average =
-        values.reduce(
-            (sum, value) =>
-                sum + value,
-            0
-        ) / values.length;
-
-    const highZones =
-        calculateRiskZones();
-
-    const rainfallCard =
-        document.getElementById(
-            "statRainfall"
-        );
-
-    if (rainfallCard) {
-        rainfallCard.textContent =
-            average.toFixed(2) +
-            " mm/day";
+        return {
+            level: "High",
+            score: 70
+        };
     }
 
-    const zonesCard =
-        document.getElementById(
-            "statZones"
-        );
+    if (rainfall >= 25) {
 
-    if (zonesCard) {
-        zonesCard.innerHTML =
-            highZones.high +
-            ' <span class="card__value-of">/ ' +
-            highZones.total +
-            "</span>";
+        return {
+            level: "Moderate",
+            score: 45
+        };
     }
-
-    const alertCard =
-        document.getElementById(
-            "statAlerts"
-        );
-
-    if (alertCard) {
-        alertCard.textContent =
-            calculateAlertCount();
-    }
-}
-
-function calculateRiskZones() {
-    const cells =
-        createGridCells();
-
-    let high =
-        0;
-
-    cells.forEach(cell => {
-        const risk =
-            calculateRisk(
-                cell.rainfall
-            );
-
-        if (
-            risk.level === "High" ||
-            risk.level === "Severe"
-        ) {
-            high++;
-        }
-    });
 
     return {
-        total: cells.size,
-        high: high
+        level: "Low",
+        score: 20
     };
 }
 
+
+/* =========================================================
+   CREATE GRID CELLS
+========================================================= */
+
 function createGridCells() {
-    const cells =
-        new Map();
+
+    const cells = new Map();
 
     rainfallData.forEach(row => {
 
@@ -252,39 +245,27 @@ function createGridCells() {
     return cells;
 }
 
-function calculateRisk(rainfall) {
-    if (rainfall >= 100) {
-        return {
-            level: "Severe",
-            score: 90
-        };
-    }
 
-    if (rainfall >= 50) {
-        return {
-            level: "High",
-            score: 70
-        };
-    }
-
-    if (rainfall >= 25) {
-        return {
-            level: "Moderate",
-            score: 45
-        };
-    }
-
-    return {
-        level: "Low",
-        score: 20
-    };
-}
+/* =========================================================
+   API PREDICTION
+========================================================= */
 
 async function predictRisk(
     latitude,
     longitude,
     rainfall
 ) {
+
+    const cacheKey =
+        `${latitude.toFixed(2)},${longitude.toFixed(2)},${rainfall.toFixed(2)}`;
+
+    if (predictionCache.has(cacheKey)) {
+
+        return predictionCache.get(
+            cacheKey
+        );
+    }
+
     try {
 
         const response =
@@ -314,13 +295,30 @@ async function predictRisk(
             );
 
         if (!response.ok) {
+
             throw new Error(
-                "Prediction API error"
+                "Prediction API error: " +
+                response.status
             );
         }
 
         const result =
             await response.json();
+
+        if (
+            result.status !== "success"
+        ) {
+
+            throw new Error(
+                result.message ||
+                "Prediction failed"
+            );
+        }
+
+        predictionCache.set(
+            cacheKey,
+            result
+        );
 
         return result;
 
@@ -335,6 +333,263 @@ async function predictRisk(
     }
 }
 
+
+/* =========================================================
+   GET PREDICTIONS FOR GRID
+========================================================= */
+
+async function getCellPredictions(
+    limit = 80
+) {
+
+    if (!rainfallData.length) {
+
+        return [];
+    }
+
+    const cells =
+        createGridCells();
+
+    const selectedCells =
+        Array.from(
+            cells.values()
+        ).slice(0, limit);
+
+    const predictions =
+        await Promise.all(
+
+            selectedCells.map(
+                async cell => {
+
+                    const prediction =
+                        await predictRisk(
+                            cell.lat,
+                            cell.lon,
+                            cell.rainfall
+                        );
+
+                    let risk;
+
+                    if (prediction) {
+
+                        risk = {
+
+                            level:
+                                prediction.risk_level ||
+                                prediction.level ||
+                                "Low",
+
+                            score:
+                                Number(
+                                    prediction.risk_score ||
+                                    prediction.score ||
+                                    20
+                                )
+                        };
+
+                    } else {
+
+                        risk =
+                            calculateRisk(
+                                cell.rainfall
+                            );
+                    }
+
+                    return {
+
+                        ...cell,
+
+                        riskLevel:
+                            risk.level,
+
+                        riskScore:
+                            risk.score,
+
+                        prediction:
+                            prediction
+
+                    };
+                }
+            )
+        );
+
+    cellPredictions =
+        predictions;
+
+    return predictions;
+}
+
+
+/* =========================================================
+   UPDATE DASHBOARD
+========================================================= */
+
+function updateDashboard(
+    predictions = cellPredictions
+) {
+
+    if (!rainfallData.length) {
+
+        return;
+    }
+
+    const values =
+        rainfallData.map(
+            row =>
+                row.precipitation
+        );
+
+    const average =
+        values.reduce(
+            (sum, value) =>
+                sum + value,
+            0
+        ) / values.length;
+
+    const rainfallCard =
+        document.getElementById(
+            "statRainfall"
+        );
+
+    if (rainfallCard) {
+
+        rainfallCard.textContent =
+            average.toFixed(2) +
+            " mm/day";
+    }
+
+
+    let highZones = 0;
+    let totalZones = predictions.length;
+
+    predictions.forEach(
+        prediction => {
+
+            if (
+                prediction.riskLevel ===
+                    "High" ||
+                prediction.riskLevel ===
+                    "Severe"
+            ) {
+
+                highZones++;
+            }
+        }
+    );
+
+
+    if (!predictions.length) {
+
+        const fallback =
+            calculateRiskZones();
+
+        highZones =
+            fallback.high;
+
+        totalZones =
+            fallback.total;
+    }
+
+
+    const zonesCard =
+        document.getElementById(
+            "statZones"
+        );
+
+    if (zonesCard) {
+
+        zonesCard.innerHTML =
+            highZones +
+            ' <span class="card__value-of">/ ' +
+            totalZones +
+            "</span>";
+    }
+
+
+    let alertCount = 0;
+
+    if (predictions.length) {
+
+        predictions.forEach(
+            prediction => {
+
+                if (
+                    prediction.riskLevel ===
+                        "High" ||
+                    prediction.riskLevel ===
+                        "Severe"
+                ) {
+
+                    alertCount++;
+                }
+            }
+        );
+
+    } else {
+
+        alertCount =
+            calculateAlertCount();
+    }
+
+
+    const alertCard =
+        document.getElementById(
+            "statAlerts"
+        );
+
+    if (alertCard) {
+
+        alertCard.textContent =
+            Math.min(
+                alertCount,
+                9
+            );
+    }
+}
+
+
+/* =========================================================
+   FALLBACK RISK ZONES
+========================================================= */
+
+function calculateRiskZones() {
+
+    const cells =
+        createGridCells();
+
+    let high = 0;
+
+    cells.forEach(cell => {
+
+        const risk =
+            calculateRisk(
+                cell.rainfall
+            );
+
+        if (
+            risk.level === "High" ||
+            risk.level === "Severe"
+        ) {
+
+            high++;
+        }
+    });
+
+    return {
+
+        total:
+            cells.size,
+
+        high:
+            high
+    };
+}
+
+
+/* =========================================================
+   CREATE RISK MAP
+========================================================= */
+
 async function createRiskMap() {
 
     const mapElement =
@@ -343,19 +598,26 @@ async function createRiskMap() {
         );
 
     if (!mapElement) {
+
         return;
     }
 
+
     if (riskMap) {
+
         riskMap.remove();
+
         mapMarkers = [];
     }
 
+
     riskMap =
-        L.map("map").setView(
-            [25.8, 93.0],
-            6
-        );
+        L.map("map")
+            .setView(
+                [25.8, 93.0],
+                6
+            );
+
 
     L.tileLayer(
         "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -365,133 +627,135 @@ async function createRiskMap() {
         }
     ).addTo(riskMap);
 
-    const cells =
-        createGridCells();
 
-    const selectedCells =
-        Array.from(
-            cells.values()
-        ).slice(0, 80);
-
-    for (
-        const cell of selectedCells
-    ) {
-
-        const prediction =
-            await predictRisk(
-                cell.lat,
-                cell.lon,
-                cell.rainfall
-            );
-
-        let risk;
-
-        if (prediction) {
-
-            risk = {
-                level:
-                    prediction.risk_level ||
-                    prediction.level ||
-                    "Low",
-
-                score:
-                    Number(
-                        prediction.risk_score ||
-                        prediction.score ||
-                        20
-                    )
-            };
-
-        } else {
-
-            risk =
-                calculateRisk(
-                    cell.rainfall
-                );
-        }
-
-        const marker =
-            L.circleMarker(
-                [
-                    cell.lat,
-                    cell.lon
-                ],
-                {
-                    radius: 7,
-
-                    weight: 2,
-
-                    color:
-                        getRiskColor(
-                            risk.level
-                        ),
-
-                    fillColor:
-                        getRiskColor(
-                            risk.level
-                        ),
-
-                    fillOpacity: 0.78
-                }
-            );
-
-        marker.bindPopup(`
-            <div class="map-popup">
-
-                <strong>
-                    AI RainGuard Risk Cell
-                </strong>
-
-                <br><br>
-
-                <b>Latitude:</b>
-                ${cell.lat.toFixed(2)}
-
-                <br>
-
-                <b>Longitude:</b>
-                ${cell.lon.toFixed(2)}
-
-                <br>
-
-                <b>NASA Rainfall:</b>
-                ${cell.rainfall.toFixed(2)}
-                mm/day
-
-                <br>
-
-                <b>Risk Level:</b>
-                ${risk.level}
-
-                <br>
-
-                <b>Risk Score:</b>
-                ${risk.score}/100
-
-                <br><br>
-
-                <small>
-                    Historical NASA GPM IMERG rainfall
-                    used for prototype rainfall-risk
-                    inference. Full inundation prediction
-                    requires additional terrain, drainage,
-                    river-level and flood-extent data.
-                </small>
-
-            </div>
-        `);
-
-        marker.addTo(
-            riskMap
+    let predictions =
+        await getCellPredictions(
+            80
         );
 
-        mapMarkers.push(
-            marker
-        );
+
+    if (!predictions.length) {
+
+        updateMapMessage();
+
+        return;
     }
+
+
+    predictions.forEach(
+        prediction => {
+
+            const marker =
+                L.circleMarker(
+                    [
+                        prediction.lat,
+                        prediction.lon
+                    ],
+                    {
+
+                        radius: 7,
+
+                        weight: 2,
+
+                        color:
+                            getRiskColor(
+                                prediction.riskLevel
+                            ),
+
+                        fillColor:
+                            getRiskColor(
+                                prediction.riskLevel
+                            ),
+
+                        fillOpacity: 0.78
+                    }
+                );
+
+
+            marker.bindPopup(`
+
+                <div class="map-popup">
+
+                    <strong>
+                        AI RainGuard Risk Cell
+                    </strong>
+
+                    <br><br>
+
+                    <b>Latitude:</b>
+                    ${prediction.lat.toFixed(2)}
+
+                    <br>
+
+                    <b>Longitude:</b>
+                    ${prediction.lon.toFixed(2)}
+
+                    <br>
+
+                    <b>NASA Rainfall:</b>
+                    ${prediction.rainfall.toFixed(2)}
+                    mm/day
+
+                    <br>
+
+                    <b>Risk Level:</b>
+                    ${prediction.riskLevel}
+
+                    <br>
+
+                    <b>Risk Score:</b>
+                    ${prediction.riskScore}/100
+
+                    <br><br>
+
+                    <small>
+
+                        Prediction generated by the
+                        connected AI RainGuard rainfall-risk
+                        API using NASA GPM IMERG rainfall
+                        input.
+
+                        <br><br>
+
+                        This prototype currently provides
+                        rainfall-risk inference.
+                        Full inundation prediction requires
+                        terrain, drainage, river-level and
+                        flood-extent inputs.
+
+                    </small>
+
+                </div>
+
+            `);
+
+
+            marker.addTo(
+                riskMap
+            );
+
+            mapMarkers.push(
+                marker
+            );
+        }
+    );
+
+
+    updateDashboard(
+        predictions
+    );
+
+    generateAlerts(
+        predictions
+    );
 
     updateMapMessage();
 }
+
+
+/* =========================================================
+   RISK COLOR
+========================================================= */
 
 function getRiskColor(level) {
 
@@ -511,6 +775,11 @@ function getRiskColor(level) {
     }
 }
 
+
+/* =========================================================
+   STATION DATA
+========================================================= */
+
 function getNearestStationData(
     stationName
 ) {
@@ -521,11 +790,14 @@ function getNearestStationData(
         ];
 
     if (!station) {
+
         return [];
     }
 
+
     const grouped =
         new Map();
+
 
     rainfallData.forEach(row => {
 
@@ -535,14 +807,17 @@ function getNearestStationData(
                 station.lat,
                 2
             ) +
+
             Math.pow(
                 row.lon -
                 station.lon,
                 2
             );
 
+
         const date =
             row.time;
+
 
         if (!grouped.has(date)) {
 
@@ -559,6 +834,7 @@ function getNearestStationData(
 
             const current =
                 grouped.get(date);
+
 
             if (
                 distance <
@@ -577,6 +853,7 @@ function getNearestStationData(
         }
     });
 
+
     return Array.from(
         grouped.values()
     )
@@ -585,6 +862,7 @@ function getNearestStationData(
             new Date(
                 a.row.time
             ) -
+
             new Date(
                 b.row.time
             )
@@ -594,6 +872,11 @@ function getNearestStationData(
             item.row
     );
 }
+
+
+/* =========================================================
+   RAINFALL CHART
+========================================================= */
 
 function createRainfallChart(
     stationName
@@ -605,26 +888,33 @@ function createRainfallChart(
         );
 
     if (!canvas) {
+
         return;
     }
+
 
     const data =
         getNearestStationData(
             stationName
         );
 
+
     const labels =
         data.map(row =>
+
             new Date(
                 row.time
             ).toLocaleDateString(
                 "en-IN",
                 {
+
                     day: "2-digit",
+
                     month: "short"
                 }
             )
         );
+
 
     const values =
         data.map(
@@ -634,14 +924,18 @@ function createRainfallChart(
                 )
         );
 
+
     if (rainfallChart) {
+
         rainfallChart.destroy();
     }
+
 
     rainfallChart =
         new Chart(
             canvas,
             {
+
                 type: "line",
 
                 data: {
@@ -652,6 +946,7 @@ function createRainfallChart(
                     datasets: [
 
                         {
+
                             label:
                                 "NASA Rainfall (mm/day)",
 
@@ -669,6 +964,7 @@ function createRainfallChart(
                         },
 
                         {
+
                             label:
                                 "Reference Level (25 mm/day)",
 
@@ -693,6 +989,7 @@ function createRainfallChart(
                     ]
                 },
 
+
                 options: {
 
                     responsive:
@@ -704,11 +1001,12 @@ function createRainfallChart(
                     plugins: {
 
                         legend: {
+
                             display:
                                 true
                         }
-
                     },
+
 
                     scales: {
 
@@ -725,27 +1023,32 @@ function createRainfallChart(
                                 text:
                                     "Rainfall (mm/day)"
                             }
-
                         }
-
                     }
-
                 }
             }
         );
+
 
     updateStationStats(
         data
     );
 }
 
+
+/* =========================================================
+   STATION STATISTICS
+========================================================= */
+
 function updateStationStats(
     data
 ) {
 
     if (!data.length) {
+
         return;
     }
+
 
     const values =
         data.map(
@@ -755,10 +1058,12 @@ function updateStationStats(
                 )
         );
 
+
     const peak =
         Math.max(
             ...values
         );
+
 
     const cumulative =
         values.reduce(
@@ -767,28 +1072,39 @@ function updateStationStats(
             0
         );
 
+
     const peakElement =
         document.getElementById(
             "statPeak"
         );
+
 
     const cumulativeElement =
         document.getElementById(
             "statCumulative"
         );
 
+
     if (peakElement) {
+
         peakElement.textContent =
             peak.toFixed(2) +
             " mm/day";
     }
 
+
     if (cumulativeElement) {
+
         cumulativeElement.textContent =
             cumulative.toFixed(2) +
             " mm";
     }
 }
+
+
+/* =========================================================
+   STATION SELECTOR
+========================================================= */
 
 function setupStationSelector() {
 
@@ -798,8 +1114,10 @@ function setupStationSelector() {
         );
 
     if (!selector) {
+
         return;
     }
+
 
     selector.addEventListener(
         "change",
@@ -813,6 +1131,11 @@ function setupStationSelector() {
     );
 }
 
+
+/* =========================================================
+   API HEALTH CHECK
+========================================================= */
+
 async function checkAPIHealth() {
 
     try {
@@ -820,37 +1143,55 @@ async function checkAPIHealth() {
         const response =
             await fetch(
                 API_URL +
-                "/api/health"
+                "/api/health",
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
             );
 
+
         if (!response.ok) {
+
             throw new Error(
                 "Backend unavailable"
             );
         }
 
+
         const health =
             await response.json();
+
 
         console.log(
             "Backend health:",
             health
         );
 
+
         if (
-            health.status === "healthy"
+            health.status ===
+            "healthy"
         ) {
+
+            apiConnected = true;
 
             setConnectionStatus(
                 true
             );
 
-        } else {
-
-            setConnectionStatus(
-                false
-            );
+            return true;
         }
+
+
+        apiConnected = false;
+
+        setConnectionStatus(
+            false
+        );
+
+        return false;
+
 
     } catch (error) {
 
@@ -859,11 +1200,20 @@ async function checkAPIHealth() {
             error
         );
 
+        apiConnected = false;
+
         setConnectionStatus(
             false
         );
+
+        return false;
     }
 }
+
+
+/* =========================================================
+   CONNECTION STATUS
+========================================================= */
 
 function setConnectionStatus(
     connected
@@ -874,39 +1224,48 @@ function setConnectionStatus(
             "statRisk"
         );
 
+
     const modelStatus =
         document.getElementById(
             "modelStatus"
         );
+
 
     const apiStatus =
         document.getElementById(
             "apiStatus"
         );
 
+
     const modelDot =
         document.getElementById(
             "modelDot"
         );
+
 
     const apiDot =
         document.getElementById(
             "apiDot"
         );
 
+
     const message =
         document.getElementById(
             "modelMessage"
         );
 
+
     if (connected) {
 
         if (riskCard) {
+
             riskCard.textContent =
                 "Connected";
         }
 
+
         if (modelStatus) {
+
             modelStatus.textContent =
                 "Connected";
 
@@ -914,7 +1273,9 @@ function setConnectionStatus(
                 "status-tag status-tag--connected";
         }
 
+
         if (apiStatus) {
+
             apiStatus.textContent =
                 "Connected";
 
@@ -922,29 +1283,39 @@ function setConnectionStatus(
                 "status-tag status-tag--connected";
         }
 
+
         if (modelDot) {
+
             modelDot.className =
                 "status-dot status-dot--connected";
         }
 
+
         if (apiDot) {
+
             apiDot.className =
                 "status-dot status-dot--connected";
         }
 
+
         if (message) {
+
             message.innerHTML =
-                "<strong>AI Risk Model: Connected.</strong> The local prediction API is responding and providing prototype rainfall-risk inference. Full inundation prediction requires additional terrain, drainage, river-level and flood-extent inputs.";
+                "<strong>AI RainGuard API: Connected.</strong> The deployed Render prediction API is responding and providing prototype rainfall-risk inference using NASA GPM IMERG rainfall input. Full inundation prediction requires additional terrain, drainage, river-level and flood-extent inputs.";
         }
+
 
     } else {
 
         if (riskCard) {
+
             riskCard.textContent =
                 "Not Connected";
         }
 
+
         if (modelStatus) {
+
             modelStatus.textContent =
                 "Not Connected";
 
@@ -952,7 +1323,9 @@ function setConnectionStatus(
                 "status-tag status-tag--pending";
         }
 
+
         if (apiStatus) {
+
             apiStatus.textContent =
                 "Not Connected";
 
@@ -960,22 +1333,33 @@ function setConnectionStatus(
                 "status-tag status-tag--pending";
         }
 
+
         if (modelDot) {
+
             modelDot.className =
                 "status-dot status-dot--pending";
         }
 
+
         if (apiDot) {
+
             apiDot.className =
                 "status-dot status-dot--pending";
         }
 
+
         if (message) {
+
             message.innerHTML =
-                "<strong>AI Risk Model: Not Connected.</strong> Start the Flask backend at port 5000 and refresh the dashboard.";
+                "<strong>AI RainGuard API: Not Connected.</strong> The deployed prediction API could not be reached. The dashboard can still display NASA rainfall data using the local prototype risk thresholds.";
         }
     }
 }
+
+
+/* =========================================================
+   MAP MESSAGE
+========================================================= */
 
 function updateMapMessage() {
 
@@ -984,16 +1368,31 @@ function updateMapMessage() {
             "#risk-map .section__head p"
         );
 
+
     if (message) {
 
-        message.textContent =
-            "Grid cells show NASA GPM IMERG rainfall across North-East India. Colours are generated through the connected rainfall-risk prediction system. Click a cell for detailed rainfall and risk information.";
+        if (apiConnected) {
+
+            message.textContent =
+                "Grid cells show NASA GPM IMERG rainfall across North-East India. Risk colours are generated through the connected AI RainGuard prediction API. Click a cell for detailed rainfall and risk information.";
+
+        } else {
+
+            message.textContent =
+                "Grid cells show NASA GPM IMERG rainfall across North-East India. The prediction API is currently unavailable, so local prototype rainfall thresholds are used as a fallback.";
+        }
     }
 }
+
+
+/* =========================================================
+   ALERT COUNT
+========================================================= */
 
 function calculateAlertCount() {
 
     let count = 0;
+
 
     rainfallData.forEach(row => {
 
@@ -1001,10 +1400,11 @@ function calculateAlertCount() {
             row.precipitation >=
             50
         ) {
+
             count++;
         }
-
     });
+
 
     return Math.min(
         count,
@@ -1012,94 +1412,186 @@ function calculateAlertCount() {
     );
 }
 
-function generateAlerts() {
+
+/* =========================================================
+   GENERATE ALERTS
+========================================================= */
+
+function generateAlerts(
+    predictions = cellPredictions
+) {
 
     const list =
         document.getElementById(
             "alertList"
         );
 
+
     if (!list) {
+
         return;
     }
+
 
     list.innerHTML =
         "";
 
-    const highRainfall =
-        rainfallData
-            .filter(
-                row =>
-                    row.precipitation >=
-                    50
-            )
-            .sort(
-                (a, b) =>
-                    b.precipitation -
-                    a.precipitation
-            )
-            .slice(0, 6);
 
-    if (!highRainfall.length) {
+    let alertData = [];
+
+
+    if (
+        predictions &&
+        predictions.length
+    ) {
+
+        alertData =
+            predictions
+                .filter(
+                    prediction =>
+                        prediction.riskLevel ===
+                            "High" ||
+                        prediction.riskLevel ===
+                            "Severe"
+                )
+                .sort(
+                    (a, b) =>
+                        b.rainfall -
+                        a.rainfall
+                )
+                .slice(
+                    0,
+                    6
+                );
+
+    } else {
+
+        alertData =
+            rainfallData
+                .filter(
+                    row =>
+                        row.precipitation >=
+                        50
+                )
+                .sort(
+                    (a, b) =>
+                        b.precipitation -
+                        a.precipitation
+                )
+                .slice(
+                    0,
+                    6
+                )
+                .map(row => {
+
+                    const risk =
+                        calculateRisk(
+                            row.precipitation
+                        );
+
+                    return {
+
+                        lat:
+                            row.lat,
+
+                        lon:
+                            row.lon,
+
+                        rainfall:
+                            row.precipitation,
+
+                        riskLevel:
+                            risk.level,
+
+                        riskScore:
+                            risk.score
+                    };
+                });
+    }
+
+
+    if (!alertData.length) {
 
         const item =
             document.createElement(
                 "li"
             );
 
+
         item.className =
             "alert-item";
 
-        item.innerHTML =
-            `
+
+        item.innerHTML = `
+
             <strong>
                 No high rainfall-risk cells detected
             </strong>
+
             <small>
-                Based on the current historical prototype dataset.
+                Based on the current NASA rainfall
+                prototype dataset.
             </small>
-            `;
+
+        `;
+
 
         list.appendChild(
             item
         );
 
+
         return;
     }
 
-    highRainfall.forEach(
-        row => {
 
-            const risk =
-                calculateRisk(
-                    row.precipitation
-                );
+    alertData.forEach(
+        prediction => {
 
             const item =
                 document.createElement(
                     "li"
                 );
 
+
             item.className =
                 "alert-item";
 
-            item.innerHTML =
-                `
+
+            const sourceText =
+                apiConnected
+                    ? "Connected AI RainGuard API"
+                    : "Local prototype fallback";
+
+
+            item.innerHTML = `
+
                 <strong>
-                    ${risk.level} rainfall-risk cell
+                    ${escapeHTML(
+                        prediction.riskLevel
+                    )}
+                    rainfall-risk cell
                 </strong>
 
                 <span>
-                    ${row.precipitation.toFixed(2)}
+                    ${Number(
+                        prediction.rainfall
+                    ).toFixed(2)}
                     mm/day
                 </span>
 
                 <small>
-                    ${row.lat.toFixed(2)}°N,
-                    ${row.lon.toFixed(2)}°E
-                    · Historical NASA data
+                    ${Number(
+                        prediction.lat
+                    ).toFixed(2)}°N,
+                    ${Number(
+                        prediction.lon
+                    ).toFixed(2)}°E
+                    · ${sourceText}
                 </small>
-                `;
+
+            `;
+
 
             list.appendChild(
                 item
@@ -1108,12 +1600,18 @@ function generateAlerts() {
     );
 }
 
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
+
 function setupNavigation() {
 
     const links =
         document.querySelectorAll(
             ".nav-link"
         );
+
 
     links.forEach(
         link => {
@@ -1124,15 +1622,18 @@ function setupNavigation() {
 
                     event.preventDefault();
 
+
                     const target =
                         link.getAttribute(
                             "href"
                         );
 
+
                     const section =
                         document.querySelector(
                             target
                         );
+
 
                     if (section) {
 
@@ -1142,8 +1643,8 @@ function setupNavigation() {
                                     "smooth"
                             }
                         );
-
                     }
+
 
                     links.forEach(
                         item =>
@@ -1151,6 +1652,7 @@ function setupNavigation() {
                                 "is-active"
                             )
                     );
+
 
                     link.classList.add(
                         "is-active"
@@ -1161,6 +1663,11 @@ function setupNavigation() {
     );
 }
 
+
+/* =========================================================
+   MOBILE MENU
+========================================================= */
+
 function setupMobileMenu() {
 
     const button =
@@ -1168,17 +1675,21 @@ function setupMobileMenu() {
             "menuToggle"
         );
 
+
     const sidebar =
         document.getElementById(
             "sidebar"
         );
 
+
     if (
         !button ||
         !sidebar
     ) {
+
         return;
     }
+
 
     button.addEventListener(
         "click",
@@ -1187,10 +1698,14 @@ function setupMobileMenu() {
             sidebar.classList.toggle(
                 "open"
             );
-
         }
     );
 }
+
+
+/* =========================================================
+   CLOCK
+========================================================= */
 
 function updateClock() {
 
@@ -1199,17 +1714,22 @@ function updateClock() {
             "liveClock"
         );
 
+
     if (!clock) {
+
         return;
     }
 
+
     const now =
         new Date();
+
 
     clock.textContent =
         now.toLocaleString(
             "en-IN",
             {
+
                 day:
                     "2-digit",
 
@@ -1231,6 +1751,11 @@ function updateClock() {
         );
 }
 
+
+/* =========================================================
+   INCIDENT REPORT FORM
+========================================================= */
+
 function setupIncidentForm() {
 
     const form =
@@ -1238,9 +1763,12 @@ function setupIncidentForm() {
             "incidentForm"
         );
 
+
     if (!form) {
+
         return;
     }
+
 
     form.addEventListener(
         "submit",
@@ -1248,29 +1776,36 @@ function setupIncidentForm() {
 
             event.preventDefault();
 
+
             const location =
                 document.getElementById(
                     "incidentLocation"
                 ).value.trim();
+
 
             const description =
                 document.getElementById(
                     "incidentDescription"
                 ).value.trim();
 
+
             const photo =
                 document.getElementById(
                     "incidentPhoto"
                 );
 
+
             const reports =
                 JSON.parse(
                     localStorage.getItem(
                         "rainGuardIncidents"
-                    ) || "[]"
+                    ) ||
+                    "[]"
                 );
 
+
             reports.push({
+
                 location:
                     location,
 
@@ -1287,6 +1822,7 @@ function setupIncidentForm() {
                         .toISOString()
             });
 
+
             localStorage.setItem(
                 "rainGuardIncidents",
                 JSON.stringify(
@@ -1294,19 +1830,25 @@ function setupIncidentForm() {
                 )
             );
 
+
             form.reset();
+
 
             const preview =
                 document.getElementById(
                     "photoPreview"
                 );
 
+
             if (preview) {
+
                 preview.hidden =
                     true;
             }
 
+
             loadIncidentReports();
+
 
             showToast(
                 "Incident report saved."
@@ -1315,6 +1857,11 @@ function setupIncidentForm() {
     );
 }
 
+
+/* =========================================================
+   INCIDENT REPORT LIST
+========================================================= */
+
 function loadIncidentReports() {
 
     const list =
@@ -1322,31 +1869,40 @@ function loadIncidentReports() {
             "reportList"
         );
 
+
     const count =
         document.getElementById(
             "reportCount"
         );
+
 
     const empty =
         document.getElementById(
             "reportEmpty"
         );
 
+
     if (!list) {
+
         return;
     }
+
 
     const reports =
         JSON.parse(
             localStorage.getItem(
                 "rainGuardIncidents"
-            ) || "[]"
+            ) ||
+            "[]"
         );
 
+
     if (count) {
+
         count.textContent =
             reports.length;
     }
+
 
     list.querySelectorAll(
         ".report-item"
@@ -1355,20 +1911,26 @@ function loadIncidentReports() {
             item.remove()
     );
 
+
     if (!reports.length) {
 
         if (empty) {
+
             empty.style.display =
                 "block";
         }
 
+
         return;
     }
 
+
     if (empty) {
+
         empty.style.display =
             "none";
     }
+
 
     reports
         .slice()
@@ -1381,11 +1943,13 @@ function loadIncidentReports() {
                         "li"
                     );
 
+
                 item.className =
                     "report-item";
 
-                item.innerHTML =
-                    `
+
+                item.innerHTML = `
+
                     <strong>
                         ${escapeHTML(
                             report.location
@@ -1405,7 +1969,9 @@ function loadIncidentReports() {
                             "en-IN"
                         )}
                     </small>
-                    `;
+
+                `;
+
 
                 list.appendChild(
                     item
@@ -1413,6 +1979,11 @@ function loadIncidentReports() {
             }
         );
 }
+
+
+/* =========================================================
+   ESCAPE HTML
+========================================================= */
 
 function escapeHTML(
     value
@@ -1423,11 +1994,18 @@ function escapeHTML(
             "div"
         );
 
+
     div.textContent =
         value || "";
 
+
     return div.innerHTML;
 }
+
+
+/* =========================================================
+   PHOTO PREVIEW
+========================================================= */
 
 function setupPhotoPreview() {
 
@@ -1436,27 +2014,33 @@ function setupPhotoPreview() {
             "incidentPhoto"
         );
 
+
     const preview =
         document.getElementById(
             "photoPreview"
         );
+
 
     const image =
         document.getElementById(
             "photoPreviewImg"
         );
 
+
     const name =
         document.getElementById(
             "photoPreviewName"
         );
 
+
     if (
         !input ||
         !preview
     ) {
+
         return;
     }
+
 
     input.addEventListener(
         "change",
@@ -1464,6 +2048,7 @@ function setupPhotoPreview() {
 
             const file =
                 input.files[0];
+
 
             if (!file) {
 
@@ -1473,18 +2058,23 @@ function setupPhotoPreview() {
                 return;
             }
 
+
             preview.hidden =
                 false;
 
+
             if (name) {
+
                 name.textContent =
                     file.name;
             }
+
 
             if (image) {
 
                 const reader =
                     new FileReader();
+
 
                 reader.onload =
                     event => {
@@ -1493,6 +2083,7 @@ function setupPhotoPreview() {
                             event.target.result;
                     };
 
+
                 reader.readAsDataURL(
                     file
                 );
@@ -1500,6 +2091,11 @@ function setupPhotoPreview() {
         }
     );
 }
+
+
+/* =========================================================
+   TOAST
+========================================================= */
 
 function showToast(
     message
@@ -1510,16 +2106,21 @@ function showToast(
             "toast"
         );
 
+
     if (!toast) {
+
         return;
     }
+
 
     toast.textContent =
         message;
 
+
     toast.classList.add(
         "show"
     );
+
 
     setTimeout(
         () => {
@@ -1533,18 +2134,26 @@ function showToast(
     );
 }
 
+
+/* =========================================================
+   INITIALIZE AI RAINGUARD
+========================================================= */
+
 async function initializeRainGuard() {
 
     console.log(
         "AI RainGuard starting..."
     );
 
+
     updateClock();
+
 
     setInterval(
         updateClock,
         1000
     );
+
 
     setupNavigation();
 
@@ -1558,14 +2167,59 @@ async function initializeRainGuard() {
 
     loadIncidentReports();
 
-    await loadRainfallData();
+
+    /*
+     * First check the deployed Render API.
+     * This avoids showing "local API" when the
+     * frontend is actually connected to Render.
+     */
 
     await checkAPIHealth();
+
+
+    /*
+     * Then load the NASA rainfall CSV.
+     */
+
+    await loadRainfallData();
+
+
+    /*
+     * Build dashboard, map and alerts using
+     * the connected prediction API.
+     */
+
+    if (rainfallData.length) {
+
+        const predictions =
+            await getCellPredictions(
+                80
+            );
+
+
+        updateDashboard(
+            predictions
+        );
+
+
+        await createRiskMap();
+
+
+        generateAlerts(
+            predictions
+        );
+    }
+
 
     console.log(
         "AI RainGuard initialized."
     );
 }
+
+
+/* =========================================================
+   START APPLICATION
+========================================================= */
 
 document.addEventListener(
     "DOMContentLoaded",
